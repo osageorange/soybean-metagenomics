@@ -1,0 +1,113 @@
+###Soybean microbiome bioinformatics commands###
+
+#Use fastqc to look at the files
+for f in *; g=`echo $f`; done; echo $g
+
+#Rename files to S1 .. S79 using sed
+for f in *; do   g=`echo $f | sed -E 's/[A-Za-z]+\-[A-Za-z]+\-[0-9]+\_//'`;  h=`echo $g | sed -E 's/\_[A-Z][0-9]+//'`; i=`echo $h | sed -E 's/\_001//'`; echo mv "$f" "$i"; done
+
+#Trim reads with cutadapt in paired mode.
+#We need to trim from the 3' (right) end of all reads, including the reverse read. We trim the forward adapter from the forward read and the reverse adapter (not the forward adapter reverse-complemented) from the reverse read. Also, quality trim at PHRED 20. 
+for i in {1..80}; do cutadapt -g TCGTCGGCAGCGTCAGATGTGTATAAGAGACAGKYMGTGAATCATCGAATCTTTGAA -G GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAGGAGTCCTCCGCTTATTGATATGC -j 3 -q 19 -o /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/trimmed/S${i}_1.fastq.gz -p /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/trimmed/S${i}_2.fastq.gz /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/S${i}_R1.fastq.gz /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/S${i}_R2.fastq.gz; done
+
+#Just messing around with bbduk to quality trim in a similar way. It ends up trimming less for some reason--I'm not sure it finds the adapters properly.
+#bbduk.sh in1=/Users/fieldcroppathology/Documents/Soybean.microbes/fastq/S1_R1.fastq.gz in2=/Users/fieldcroppathology/Documents/Soybean.microbes/fastq/S1_R2.fastq.gz out1=/Users/fieldcroppathology/Documents/Soybean.microbes/NEW/trimmed_bbduk/S1_1.fastq.gz out2=/Users/fieldcroppathology/Documents/Soybean.microbes/NEW/trimmed_bbduk/S1_2.fastq.gz ref=/Applications/bbmap/resources/nextera.fa literal=TCGTCGGCAGCGTCAGATGTGTATAAGAGACAGCCTACGGGNGGCWGCAG,GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAGGACTACHVGGGTATCTAATCC ktrim=l k=23 qtrim=r trimq=20 mink=11 hdist=1 tpe tbo
+
+#Merge paired reads with Pandaseq using a 'for' loop
+for i in {1..80}; do pandaseq -A pear -T 6 -l 280 -L 600 -t 0.4 -f /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/trimmed/S${i}_1.fastq.gz -r /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/trimmed/S${i}_2.fastq.gz -w /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/merged/S${i}.fasta; done
+
+
+#In Geneious, rename sequence headers to incorporate sample name and add 'barcodelabel='
+	#1 First, name all of the fasta files with just the sample names (ex. S1.fasta)
+	#2 Import into Geneious as lists
+	#3 Selecting all sequence lists (all 79) use Batch Rename to:
+	#4 Remove first 34 characters (ones that are common among all sequences within a file)
+	#5 Replace header name with Document Name then _ then Sequence Name. This adds a prefix like S1_ to the header
+	#6 Add 'barcodelabel=' to the start of every header.
+	#7 Replace any ';' with ':'
+	#8 Replace '_' after sample name to ';'
+	#8 Export files from Geneious individually using Batch Export, keeping the samples seperate
+
+#Dereplicate at the sample level with VSEARCH
+for i in {1..80}; do vsearch --derep_fulllength /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/Renamed/S${i}.fasta --output /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/sample.derep/S${i}.derep.fasta --sizeout --strand plus --fasta_width 0; done
+
+#Also combine the samples without dereplicating
+cat /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/Renamed/*.fasta > /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.raw.fasta
+#Then dereplicate and remove singletons across all samples for later filtering and OTU clustering
+vsearch --derep_fulllength /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.raw.fasta --minuniquesize 2 --sizeout --fasta_width 0 --threads 7 --output /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.raw.derep.fasta
+
+#Merge all samples together
+cat /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/sample.derep/*.fasta > /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep.fasta
+
+#Dereplicate across all samples and remove singletons
+vsearch --derep_fulllength /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep.fasta --minuniquesize 2 --sizein --sizeout --fasta_width 0 --threads 7 --uc /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep2.uc --output /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep2.fasta
+
+#Count unique non-singleton sequences
+echo Unique non-singleton sequences: $(grep -c "^>" /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep2.fasta)
+Unique non-singleton sequences: 195897; 191377
+
+#Precluster at 98% before chimera detection
+vsearch --cluster_size /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep2.fasta --id 0.97 --strand plus --sizein --sizeout --fasta_width 0 --threads 7 --uc /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.preclustered.uc --centroids /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.preclustered.fasta
+
+#Count unique sequences after preclustering
+echo Unique sequences after preclustering: $(grep -c "^>" /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.preclustered.fasta)
+Unique sequences after preclustering: 4619; 3296
+
+#Sort and remove singletons
+vsearch --sortbysize /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.preclustered.fasta --sizein --sizeout --threads 7 --fasta_width 0 --minsize 2 --output /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.preclustered.sorted.fasta
+
+echo Non-singleton clusters: $(grep -c "^>" /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.preclustered.sorted.fasta)
+Unique non-singletons: 3296
+
+#De novo chimera detection
+vsearch --uchime_denovo /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.preclustered.sorted.fasta --sizein --sizeout --fasta_width 0 --threads 7 --nonchimeras /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.denovo.nonchimeras.fasta
+
+#Reference chimera detection
+#First, download Silva gold reference database
+wget https://www.mothur.org/w/images/f/f1/Silva.gold.bacteria.zip -O /Users/fieldcroppathology/Documents/Soybean.microbes/Silva.gold.bacteria.zip
+#Unzip it
+unzip /Users/fieldcroppathology/Documents/Soybean.microbes/Silva.gold.bacteria.zip -d /Users/fieldcroppathology/Documents/Soybean.microbes/ 
+#Remove '.' and '-' to convert to usable reference fasta (according to vsearch creator at https://github.com/torognes/vsearch/wiki/VSEARCH-pipeline)
+sed -E 's/[\.\-]//g' /Volumes/Storage/soybean_microbes/fungi/UNITE_2-4-20.fasta > /Volumes/Storage/soybean_microbes/fungi/UNITE_2-4-20_mod.fasta
+#Now do the ref chimera detection
+vsearch --uchime_ref /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.denovo.nonchimeras.fasta -db /Volumes/Storage/soybean_microbes/fungi/UNITE_2-4-20_mod.fasta --sizein --sizeout --fasta_width 0 --threads 7 --nonchimeras /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.ref.nonchimeras.fasta
+
+#Unique sequences after ref-based chimera detection
+echo Unique sequences after reference-based chimera detection: $(grep -c "^>" /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.ref.nonchimeras.fasta)
+Unique seqs 4076; 2961
+
+#Relabel OTUs
+vsearch --fastx_filter /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.ref.nonchimeras.fasta --threads 7 --sizein --sizeout --fasta_width 0 --relabel OTU_ --fastaout /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.fasta
+
+#Obtain taxonomy from UNITE by USEARCH global
+vsearch --usearch_global /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.fasta --threads 7 --db /Volumes/Storage/soybean_microbes/fungi/UNITE_2-4-20_mod.fasta --id 0.75 --strand both --sizein --sizeout --fasta_width 0 --qmask none --dbmask none --top_hits_only --matched /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.hits.fasta --dbmatched /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.tax.fasta --blast6out /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.tax.blast.txt
+vsearch --usearch_global /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.fasta --threads 7 --db /Volumes/Storage/soybean_microbes/fungi/UNITE_2-4-20_mod.fasta --id 0.90 --strand both --sizein --sizeout --fasta_width 0 --qmask none --dbmask none --top_hits_only --matched /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.hits.0.90.fasta --dbmatched /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.tax.0.90.fasta --blast6out /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.tax.blast.0.90.txt
+vsearch --usearch_global /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.fasta --threads 7 --db /Volumes/Storage/soybean_microbes/fungi/UNITE_euk_2.4.20.fasta --id 0.75 --strand both --sizein --sizeout --fasta_width 0 --qmask none --dbmask none --top_hits_only --matched /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.hits.fasta --dbmatched /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.tax.fasta --blast6out /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.tax.blast.txt
+#Only 45% match fungi. 74.47% match all eukaryotes.
+
+#Search in all.derep -- only dereplicated by sample and make OTU table with 97% match ID b/c that's what we used for clustering. Use the OTUs that hit to the database, not the actual database. 
+vsearch --usearch_global /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep.fasta --threads 3 --db /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.hits.fasta --id 0.75 --strand both --sizein --sizeout --fasta_width 0 --qmask none --dbmask none --otutabout /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/OTU_table_notax_0.75.txt
+vsearch --usearch_global /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep.fasta --threads 7 --db /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.hits.0.90.fasta --id 0.90 --strand both --sizein --sizeout --fasta_width 0 --qmask none --dbmask none --otutabout /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/OTU_table_notax_0.90.txt
+vsearch --usearch_global /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/all.derep.fasta --threads 7 --db /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.hits.fasta --id 0.75 --strand both --sizein --sizeout --fasta_width 0 --qmask none --dbmask none --otutabout /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/OTU_table_euk.notax.txt
+
+#Use gsub to edit the blast-like output from the usearch_global search to make a 'key' file with replacements for awk
+sed -E 's/([a-z]) .+/\1/g' /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.tax.blast.txt | sed -E 's/\;size\=[0-9]+//g' | sed -E 's/   / /g'  > /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.tax.blast.key.txt
+sed -E 's/([A-Za-z0-9])\;        .+/\1/g' /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.tax.blast.txt | sed -E 's/\;[a-z]+\=[0-9]+//g' | sed -E 's/  / /g' | sed -E 's/[A-Z0-9]+\|[A-Z0-9\.]+\;[a-z]+\=//g'  > /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.tax.blast.key.txt
+sed -E 's/([A-Za-z0-9])\;        .+/\1/g' /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.tax.blast.txt | sed -E 's/\;[a-z]+\=[0-9]+.+//g' | sed -E 's/  / /g' | sed -E 's/\;[a-z]+\=//g'  > /Volumes/Storage/soybean_microbes/fungi/FastqFiles_MS0357_Thiessen/final_OTUs.euk.tax.blast.key.txt
+
+#Use BBedit to make into a CSV
+
+#Use R to find and replace the OTU ID with the corresponding taxonomy
+
+###Notes:
+1) Differences when including all Eukaryotes, but not when just fungi.
+2) There are a large portion of sequences that are excluded when just searching for fungi -- probably algae and unknown eukaryotes that are changing.
+3) "Hellinger" transformation seems to work very well in reducing the stress in the NMDS.
+4) Re-did the PERMANOVA from Felipe's code because it was simplistic and only allowed for presence-absence, but the manual has instructions for other types of transformations.
+5) The pipeline above is different from the bacteria pipeline -- it's better because we're only querying UNITE once and making the OTU table once, then we match up the OTU IDs with the taxonomy after the fact.
+
+###To do:
+1) May want to search at 95% on UNITE and when making OTU table, then collapse taxa at the family level, then do analyses.
+2) Re-do the bacteria pipeline using the updated taxonomy query method above.
+2) Once happy with fungal breakdown, use fungal functional database to get functional guilds and repeat analyses.
+3) Final components: a) Bacteria, b) All eukaryotes, c) All fungi, d) AM, e) ECM, f) Saprotrophs, g) Pathogens
